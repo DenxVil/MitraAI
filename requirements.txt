@@ -1,7 +1,9 @@
-# Core AI/ML
-openai>=1.3.0
-azure-identity>=1.14.0
-tiktoken>=0.5.1
+# Core AI/ML - Local Model
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.24.0
+bitsandbytes>=0.41.0
+sentencepiece>=0.1.99
 
 # Telegram Bot
 python-telegram-bot>=20.6

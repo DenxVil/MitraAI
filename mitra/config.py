@@ -20,14 +20,11 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production"] = "development"
     log_level: str = "INFO"
 
-    # Azure OpenAI Configuration
-    azure_openai_endpoint: str = ""
-    azure_openai_api_key: str = ""
-    azure_openai_deployment_name: str = "gpt-4"
-    azure_openai_api_version: str = "2024-02-15-preview"
-
-    # Alternative OpenAI Configuration
-    openai_api_key: str = ""
+    # Local AI Model Configuration
+    local_model_name: str = "microsoft/Phi-3-mini-4k-instruct"
+    local_model_device: str = "auto"
+    local_model_quantize: bool = True
+    local_model_max_tokens: int = 512
 
     # Telegram Bot
     telegram_bot_token: str = ""
@@ -53,18 +50,12 @@ class Settings(BaseSettings):
         """Check if running in development environment."""
         return self.environment == "development"
 
-    @property
-    def use_azure_openai(self) -> bool:
-        """Check if Azure OpenAI is configured."""
-        return bool(self.azure_openai_endpoint and self.azure_openai_api_key)
-
     def validate_required_settings(self) -> None:
         """Validate that all required settings are present."""
         if not self.telegram_bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
 
-        if not self.use_azure_openai and not self.openai_api_key:
-            raise ValueError("Either Azure OpenAI credentials or OpenAI API key must be provided")
+        # Local model is always used, no API keys needed
 
 
 # Global settings instance

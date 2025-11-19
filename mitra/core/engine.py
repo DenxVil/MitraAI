@@ -2,12 +2,11 @@
 Core AI engine for Mitra.
 
 Orchestrates AI responses with emotion awareness, multi-step reasoning,
-and safety features.
+and safety features using a local language model.
 """
 
 from typing import Optional
 import asyncio
-from openai import AsyncOpenAI, AsyncAzureOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config import settings
@@ -16,6 +15,7 @@ from ..utils import get_logger, ErrorHandler, ErrorCategory, MitraError
 from .emotion_analyzer import EmotionAnalyzer
 from .safety_filter import SafetyFilter
 from .prompts import PromptBuilder, SystemPrompts
+from .local_model import LocalModelEngine
 
 
 logger = get_logger(__name__)
@@ -26,22 +26,20 @@ class MitraEngine:
     Core intelligence engine for Mitra AI.
 
     Handles conversation management, emotion analysis, reasoning,
-    and response generation with safety features.
+    and response generation with safety features using a local model.
     """
 
     def __init__(self):
         """Initialize the Mitra engine."""
-        # Initialize AI client
-        if settings.use_azure_openai:
-            self.client = AsyncAzureOpenAI(
-                api_key=settings.azure_openai_api_key,
-                api_version=settings.azure_openai_api_version,
-                azure_endpoint=settings.azure_openai_endpoint,
-            )
-            self.model = settings.azure_openai_deployment_name
-        else:
-            self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-            self.model = "gpt-4"
+        # Initialize local AI model
+        self.client = LocalModelEngine(
+            model_name=settings.local_model_name,
+            device=settings.local_model_device,
+            load_in_4bit=settings.local_model_quantize,
+            max_new_tokens=settings.local_model_max_tokens,
+            temperature=0.7,
+        )
+        self.model = settings.local_model_name
 
         # Initialize components
         self.emotion_analyzer = EmotionAnalyzer()
@@ -140,26 +138,22 @@ class MitraEngine:
             Generated response text
         """
         try:
-            # Build messages for API
+            # Build messages for local model
             messages = self._build_api_messages(conversation, emotional_context)
 
-            # Call AI API
-            response = await self.client.chat.completions.create(
-                model=self.model,
+            # Call local model
+            response_text = await self.client.generate_response(
                 messages=messages,
+                max_new_tokens=512,
                 temperature=0.7,
-                max_tokens=800,
                 top_p=0.9,
-                frequency_penalty=0.3,
-                presence_penalty=0.3,
+                repetition_penalty=1.1,
             )
-
-            response_text = response.choices[0].message.content.strip()
 
             logger.debug(
                 "ai_response_generated",
                 conversation_id=conversation.id,
-                tokens_used=response.usage.total_tokens if response.usage else None,
+                response_length=len(response_text),
             )
 
             return response_text

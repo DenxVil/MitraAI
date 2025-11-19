@@ -1,10 +1,11 @@
 # 🤖 Mitra AI - Emotionally Intelligent AI Assistant
 
-Mitra is an advanced AI assistant that combines deep reasoning capabilities with emotional intelligence to provide thoughtful, supportive interactions through Telegram.
+Mitra is an advanced AI assistant that combines deep reasoning capabilities with emotional intelligence to provide thoughtful, supportive interactions through Telegram. **Built with a local AI model** - no external API calls required!
 
 ## 🌟 Features
 
 ### Core Capabilities
+- **Local AI Model**: Runs entirely on your infrastructure using Microsoft Phi-3-mini (3.8B parameters)
 - **Deep Reasoning**: Multi-step problem solving with chain-of-thought processing
 - **Emotional Intelligence**: Sentiment analysis and emotion detection to adapt responses
 - **Crisis Detection**: Identifies crisis situations and provides appropriate resources
@@ -13,13 +14,15 @@ Mitra is an advanced AI assistant that combines deep reasoning capabilities with
 - **Rate Limiting**: Built-in abuse prevention and rate limiting
 
 ### Technical Features
+- **Self-Contained**: No external API dependencies or costs
 - **Modular Architecture**: Clean separation of concerns for maintainability
 - **Structured Logging**: Comprehensive logging with correlation IDs
 - **Error Handling**: Robust error handling with user-friendly messages
-- **Azure Integration**: Designed for Azure OpenAI and Azure Container Apps
+- **Azure Optimized**: Designed for Azure Container Apps deployment
 - **CI/CD Pipeline**: Automated testing, building, and deployment via GitHub Actions
 - **Type Safety**: Full type hints with mypy checking
-- **Containerized**: Docker support for consistent deployments
+- **Containerized**: Docker support with GPU acceleration
+- **Customizable**: Can be fine-tuned on Indian language data
 
 ## 🏗️ Architecture
 
@@ -47,7 +50,8 @@ mitra/
 ### Prerequisites
 - Python 3.11 or higher
 - Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
-- Azure OpenAI API credentials OR OpenAI API key
+- 4GB+ RAM (8GB recommended)
+- GPU optional but recommended for faster inference
 
 ### Installation
 
@@ -70,14 +74,16 @@ cp .env.example .env
 
 Required environment variables:
 - `TELEGRAM_BOT_TOKEN`: Your Telegram bot token
-- `AZURE_OPENAI_ENDPOINT`: Your Azure OpenAI endpoint (if using Azure)
-- `AZURE_OPENAI_API_KEY`: Your Azure OpenAI API key (if using Azure)
-- `OPENAI_API_KEY`: Your OpenAI API key (if not using Azure)
+- `LOCAL_MODEL_NAME`: Model name (default: `microsoft/Phi-3-mini-4k-instruct`)
+- `LOCAL_MODEL_DEVICE`: Device to use (`cpu`, `cuda`, or `auto`)
+- `LOCAL_MODEL_QUANTIZE`: Enable 4-bit quantization (`true`/`false`)
 
 4. **Run the bot**
 ```bash
 python main.py
 ```
+
+**Note**: On first run, the model will be downloaded (~4GB). This may take a few minutes.
 
 ## 🔧 Configuration
 
@@ -135,12 +141,19 @@ Run with: `docker-compose up -d`
 
 ## ☁️ Azure Deployment
 
-### Prerequisites
-- Azure account
-- Azure Container Apps environment
-- Azure OpenAI service
+Mitra AI is optimized for deployment on Azure Container Apps. We provide a **comprehensive step-by-step guide** with screenshots for deploying via the Azure Portal (web interface).
 
-### Setup Steps
+### 📘 Complete Deployment Guide
+
+See **[AZURE_DEPLOYMENT_GUIDE.md](AZURE_DEPLOYMENT_GUIDE.md)** for:
+- Complete Azure Portal (web interface) setup walkthrough
+- Model training on Indian language data
+- GPU acceleration configuration
+- Cost optimization strategies
+- Monitoring and troubleshooting
+- Production best practices
+
+### Quick Azure Deployment
 
 1. **Create Azure resources**
 ```bash
@@ -289,11 +302,21 @@ MitraAI/
 
 ### Technology Choices
 - **Python 3.11+**: Modern Python with excellent AI/ML ecosystem
-- **OpenAI/Azure OpenAI**: State-of-the-art language models
+- **Microsoft Phi-3-mini**: 3.8B parameter model, efficient and capable
+- **HuggingFace Transformers**: Industry-standard model inference
+- **4-bit Quantization**: Reduces memory usage by 75% with minimal quality loss
 - **python-telegram-bot**: Robust, well-maintained Telegram library
 - **structlog**: Structured logging for better observability
 - **Pydantic**: Data validation and settings management
 - **Docker**: Consistent deployment across environments
+
+### Why Local Model?
+1. **No API Costs**: Run indefinitely without per-request charges
+2. **Data Privacy**: All processing happens on your infrastructure
+3. **No Rate Limits**: Handle unlimited concurrent users
+4. **Customizable**: Fine-tune on your specific data (e.g., Indian languages)
+5. **Offline Capable**: Works without internet connectivity
+6. **Predictable Performance**: No external service dependencies
 
 ## 🚧 Roadmap
 

@@ -4,6 +4,7 @@ from .engine import MitraEngine
 from .emotion_analyzer import EmotionAnalyzer
 from .safety_filter import SafetyFilter
 from .prompts import PromptBuilder, SystemPrompts
+from .local_model import LocalModelEngine
 
 __all__ = [
     "MitraEngine",
@@ -11,4 +12,5 @@ __all__ = [
     "SafetyFilter",
     "PromptBuilder",
     "SystemPrompts",
+    "LocalModelEngine",
 ]
