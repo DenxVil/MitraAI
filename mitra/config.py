@@ -13,10 +13,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
     # Environment
@@ -67,9 +64,7 @@ class Settings(BaseSettings):
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
 
         if not self.use_azure_openai and not self.openai_api_key:
-            raise ValueError(
-                "Either Azure OpenAI credentials or OpenAI API key must be provided"
-            )
+            raise ValueError("Either Azure OpenAI credentials or OpenAI API key must be provided")
 
 
 # Global settings instance

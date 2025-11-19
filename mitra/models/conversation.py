@@ -2,13 +2,14 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field, ConfigDict
 from uuid import uuid4
 
 
 class MessageRole(str, Enum):
     """Role of a message in the conversation."""
+
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
@@ -16,65 +17,55 @@ class MessageRole(str, Enum):
 
 class EmotionalContext(BaseModel):
     """Emotional context detected from user message."""
-    
+
     sentiment: str = Field(
-        default="neutral",
-        description="Overall sentiment: positive, negative, neutral"
+        default="neutral", description="Overall sentiment: positive, negative, neutral"
     )
     emotions: List[str] = Field(
         default_factory=list,
-        description="Detected emotions: joy, sadness, anger, fear, stress, etc."
+        description="Detected emotions: joy, sadness, anger, fear, stress, etc.",
     )
     intensity: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="Emotional intensity from 0 (calm) to 1 (intense)"
+        default=0.5, ge=0.0, le=1.0, description="Emotional intensity from 0 (calm) to 1 (intense)"
     )
     needs_support: bool = Field(
-        default=False,
-        description="Whether user appears to need emotional support"
+        default=False, description="Whether user appears to need emotional support"
     )
     urgency_level: str = Field(
-        default="low",
-        description="Urgency level: low, medium, high, critical"
+        default="low", description="Urgency level: low, medium, high, critical"
     )
 
 
 class Message(BaseModel):
     """A single message in a conversation."""
-    
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: str = Field(default_factory=lambda: str(uuid4()))
     role: MessageRole
     content: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     emotional_context: Optional[EmotionalContext] = None
-    metadata: dict = Field(default_factory=dict)
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Conversation(BaseModel):
     """A conversation thread with message history."""
-    
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: str = Field(default_factory=lambda: str(uuid4()))
     user_id: str
     messages: List[Message] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-    metadata: dict = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    def add_message(self, role: MessageRole, content: str, 
-                   emotional_context: Optional[EmotionalContext] = None) -> Message:
+    def add_message(
+        self, role: MessageRole, content: str, emotional_context: Optional[EmotionalContext] = None
+    ) -> Message:
         """Add a message to the conversation."""
-        message = Message(
-            role=role,
-            content=content,
-            emotional_context=emotional_context
-        )
+        message = Message(role=role, content=content, emotional_context=emotional_context)
         self.messages.append(message)
         self.updated_at = datetime.utcnow()
         return message
@@ -83,15 +74,7 @@ class Conversation(BaseModel):
         """Get the most recent messages."""
         return self.messages[-limit:] if len(self.messages) > limit else self.messages
 
-    def to_openai_format(self, max_messages: Optional[int] = None) -> List[dict]:
+    def to_openai_format(self, max_messages: Optional[int] = None) -> List[Dict[str, str]]:
         """Convert conversation to OpenAI API format."""
         messages = self.get_recent_messages(max_messages) if max_messages else self.messages
-        return [
-            {"role": msg.role.value, "content": msg.content}
-            for msg in messages
-        ]
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        return [{"role": msg.role.value, "content": msg.content} for msg in messages]

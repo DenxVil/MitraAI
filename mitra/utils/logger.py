@@ -15,7 +15,7 @@ from structlog.types import FilteringBoundLogger
 def setup_logging(log_level: str = "INFO", environment: str = "development") -> None:
     """
     Configure structured logging for the application.
-    
+
     Args:
         log_level: The logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         environment: The environment (development, staging, production)
@@ -45,9 +45,11 @@ def setup_logging(log_level: str = "INFO", environment: str = "development") -> 
         processors.append(structlog.processors.JSONRenderer())
     else:
         # Development: Pretty console output
-        processors.extend([
-            structlog.dev.ConsoleRenderer(colors=True),
-        ])
+        processors.extend(
+            [
+                structlog.dev.ConsoleRenderer(colors=True),
+            ]
+        )
 
     structlog.configure(
         processors=processors,
@@ -61,10 +63,10 @@ def setup_logging(log_level: str = "INFO", environment: str = "development") -> 
 def get_logger(name: str) -> FilteringBoundLogger:
     """
     Get a structured logger instance.
-    
+
     Args:
         name: The name of the logger (typically __name__)
-        
+
     Returns:
         A configured structured logger
     """
@@ -74,7 +76,7 @@ def get_logger(name: str) -> FilteringBoundLogger:
 def add_correlation_id(correlation_id: str) -> None:
     """
     Add a correlation ID to the logging context.
-    
+
     Args:
         correlation_id: The correlation/request ID to track
     """
@@ -86,15 +88,10 @@ def clear_correlation_id() -> None:
     structlog.contextvars.unbind_contextvars("correlation_id")
 
 
-def log_event(
-    logger: FilteringBoundLogger,
-    event: str,
-    level: str = "info",
-    **kwargs: Any
-) -> None:
+def log_event(logger: FilteringBoundLogger, event: str, level: str = "info", **kwargs: Any) -> None:
     """
     Log a structured event with additional context.
-    
+
     Args:
         logger: The logger instance
         event: The event description

@@ -10,7 +10,7 @@ from ..models import Message, EmotionalContext
 
 class SystemPrompts:
     """Collection of system prompts for different contexts."""
-    
+
     BASE_SYSTEM_PROMPT = """You are Mitra, an emotionally intelligent AI assistant designed to understand humans deeply and provide thoughtful, supportive interactions.
 
 Your core capabilities:
@@ -73,79 +73,76 @@ Then provide a clear, helpful response based on this reasoning."""
 
 class PromptBuilder:
     """Builder for constructing prompts with context."""
-    
+
     @staticmethod
     def build_system_prompt(
-        include_emotional_context: bool = True,
-        custom_instructions: Optional[str] = None
+        include_emotional_context: bool = True, custom_instructions: Optional[str] = None
     ) -> str:
         """
         Build the main system prompt for Mitra.
-        
+
         Args:
             include_emotional_context: Whether to include emotional awareness instructions
             custom_instructions: Additional custom instructions to append
-            
+
         Returns:
             Complete system prompt
         """
         prompt = SystemPrompts.BASE_SYSTEM_PROMPT
-        
+
         if custom_instructions:
             prompt += f"\n\nAdditional instructions:\n{custom_instructions}"
-        
+
         return prompt
-    
+
     @staticmethod
     def build_message_with_context(
-        user_message: str,
-        emotional_context: Optional[EmotionalContext] = None
+        user_message: str, emotional_context: Optional[EmotionalContext] = None
     ) -> str:
         """
         Build a user message enriched with emotional context.
-        
+
         Args:
             user_message: The user's message
             emotional_context: Detected emotional context
-            
+
         Returns:
             Enhanced message with context
         """
         if not emotional_context or not emotional_context.emotions:
             return user_message
-        
+
         # Add subtle emotional context that informs the response
-        context_note = f"\n[Context: User appears to be feeling {', '.join(emotional_context.emotions[:2])}]"
-        
+        context_note = (
+            f"\n[Context: User appears to be feeling {', '.join(emotional_context.emotions[:2])}]"
+        )
+
         return user_message + context_note
-    
+
     @staticmethod
-    def build_conversation_context(
-        messages: List[Message],
-        max_tokens: int = 2000
-    ) -> str:
+    def build_conversation_context(messages: List[Message], max_tokens: int = 2000) -> str:
         """
         Build a summary of conversation context.
-        
+
         Args:
             messages: Recent messages in the conversation
             max_tokens: Approximate token limit for context
-            
+
         Returns:
             Context summary
         """
         # Simple implementation - in production, consider more sophisticated summarization
         if not messages:
             return "New conversation"
-        
+
         summary_parts = []
         total_length = 0
-        
+
         for msg in reversed(messages[-5:]):  # Last 5 messages
             snippet = f"{msg.role.value}: {msg.content[:100]}"
             if total_length + len(snippet) > max_tokens:
                 break
             summary_parts.insert(0, snippet)
             total_length += len(snippet)
-        
+
         return "Recent conversation:\n" + "\n".join(summary_parts)

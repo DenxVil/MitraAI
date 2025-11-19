@@ -16,6 +16,7 @@ logger = get_logger(__name__)
 
 class ErrorCategory(str, Enum):
     """Categories of errors in the system."""
+
     AI_SERVICE = "ai_service"
     TELEGRAM_API = "telegram_api"
     CONFIGURATION = "configuration"
@@ -29,6 +30,7 @@ class ErrorCategory(str, Enum):
 @dataclass
 class ErrorContext:
     """Context information for an error."""
+
     category: ErrorCategory
     user_id: Optional[str] = None
     conversation_id: Optional[str] = None
@@ -38,14 +40,14 @@ class ErrorContext:
 
 class MitraError(Exception):
     """Base exception for Mitra AI errors."""
-    
+
     def __init__(
         self,
         message: str,
         category: ErrorCategory = ErrorCategory.INTERNAL,
         context: Optional[ErrorContext] = None,
         original_error: Optional[Exception] = None,
-        user_facing_message: Optional[str] = None
+        user_facing_message: Optional[str] = None,
     ):
         super().__init__(message)
         self.message = message
@@ -69,21 +71,19 @@ class MitraError(Exception):
 
 class ErrorHandler:
     """Centralized error handling and logging."""
-    
+
     @staticmethod
     def handle_error(
-        error: Exception,
-        context: Optional[ErrorContext] = None,
-        user_id: Optional[str] = None
+        error: Exception, context: Optional[ErrorContext] = None, user_id: Optional[str] = None
     ) -> MitraError:
         """
         Handle an error and convert it to a MitraError.
-        
+
         Args:
             error: The original exception
             context: Additional error context
             user_id: The user ID if available
-            
+
         Returns:
             A MitraError instance with appropriate handling
         """
@@ -94,7 +94,7 @@ class ErrorHandler:
 
         # Determine error category
         category = ErrorHandler._categorize_error(error)
-        
+
         # Create context if not provided
         if context is None:
             context = ErrorContext(category=category, user_id=user_id)
@@ -103,10 +103,7 @@ class ErrorHandler:
 
         # Create MitraError
         mitra_error = MitraError(
-            message=str(error),
-            category=category,
-            context=context,
-            original_error=error
+            message=str(error), category=category, context=context, original_error=error
         )
 
         # Log the error
