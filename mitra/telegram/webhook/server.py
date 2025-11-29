@@ -102,7 +102,6 @@ class WebhookServer:
                         raise HTTPException(status_code=403, detail="Invalid secret token")
 
                 # Parse update
-                body = await request.body()
                 update_data = await request.json()
 
                 logger.info(

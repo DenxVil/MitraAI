@@ -64,8 +64,9 @@ class Permission(Enum):
 
 
 # Role to permissions mapping
+# Note: SUPER_ADMIN gets all current permissions; new permissions are automatically included
 ROLE_PERMISSIONS: Dict[AdminRole, Set[Permission]] = {
-    AdminRole.SUPER_ADMIN: set(Permission),  # All permissions
+    AdminRole.SUPER_ADMIN: {p for p in Permission},  # All defined permissions
 
     AdminRole.ADMIN: {
         Permission.VIEW_USERS, Permission.MANAGE_USERS, Permission.BAN_USERS,

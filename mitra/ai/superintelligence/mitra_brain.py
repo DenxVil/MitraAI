@@ -464,12 +464,19 @@ class MitraSuperBrain:
                 messages.extend(context)
             messages.append({"role": "user", "content": prompt})
 
-            # Tokenize
-            inputs = self._tokenizer.apply_chat_template(
+            # Tokenize - handle different tokenizer return types
+            tokenized = self._tokenizer.apply_chat_template(
                 messages,
                 return_tensors="pt",
                 add_generation_prompt=True,
-            ).to(self._model.device)
+            )
+            
+            # Move to model device if available
+            device = getattr(self._model, "device", None)
+            if device is not None and hasattr(tokenized, "to"):
+                inputs = tokenized.to(device)
+            else:
+                inputs = tokenized
 
             # Generate
             with torch.no_grad():

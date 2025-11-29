@@ -121,7 +121,7 @@ class QLoRATrainer:
                 quantization_config=bnb_config,
                 device_map="auto",
                 trust_remote_code=True,
-                attn_implementation="eager",  # For compatibility
+                attn_implementation="eager",  # Required for quantized models with flash attention disabled
             )
 
             # Prepare for k-bit training

@@ -239,8 +239,12 @@ class CircuitBreaker:
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            # For sync functions, run in event loop
-            loop = asyncio.get_event_loop()
+            # For sync functions, create a new event loop
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             return loop.run_until_complete(self.call(func, *args, **kwargs))
 
         if asyncio.iscoroutinefunction(func):
