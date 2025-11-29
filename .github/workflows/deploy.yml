@@ -9,7 +9,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -18,25 +17,26 @@ jobs:
     permissions:
       contents: read
       packages: write
-    # expose a job output with the lowercased image name
+      id-token: write
+    # expose the full image (including tag) as a job output so deploy can use it exactly
     outputs:
-      image_name: ${{ steps.set-image.outputs.image_name }}
+      image: ${{ steps.set-image-output.outputs.image }}
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # set a lowercase image name and export it as a step output
     - id: set-image
       name: Set IMAGE_NAME (lowercase)
       run: |
+        # produce a lowercase owner/repo (e.g. denxvil/mitraai)
         image_name=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
         echo "image_name=$image_name" >> $GITHUB_OUTPUT
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Log in to Container Registry
+    - name: Log in to GHCR
       uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY }}
@@ -47,7 +47,8 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        # use the lowercase image name produced above
+        images: ${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr
@@ -65,6 +66,13 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Set image output (full image reference)
+      id: set-image-output
+      run: |
+        # use the same lowercase name and github.sha as the tag to be deterministic
+        full_image="${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}:${{ github.sha }}"
+        echo "image=$full_image" >> $GITHUB_OUTPUT
 
   deploy-azure:
     name: Deploy to Azure Container Apps
@@ -85,8 +93,11 @@ jobs:
       with:
         containerAppName: mitra-ai
         resourceGroup: ${{ secrets.AZURE_RESOURCE_GROUP }}
-        # use the lowercased image name produced by the build job
-        imageToDeploy: ${{ env.REGISTRY }}/${{ needs.build-and-push.outputs.image_name }}:${{ github.sha }}
+        imageToDeploy: ${{ needs.build-and-push.outputs.image }}
+        # If the GHCR image is private, supply these so Azure can pull it
+        registryServer: ghcr.io
+        registryUsername: ${{ secrets.GHCR_USERNAME }}
+        registryPassword: ${{ secrets.GHCR_PAT }}
         environmentVariables: |
           ENVIRONMENT=production
           LOG_LEVEL=INFO
@@ -94,7 +105,6 @@ jobs:
           telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}
           azure-openai-api-key=${{ secrets.AZURE_OPENAI_API_KEY }}
           azure-openai-endpoint=${{ secrets.AZURE_OPENAI_ENDPOINT }}
-      continue-on-error: true
 
     - name: Notify deployment status
       if: always()
