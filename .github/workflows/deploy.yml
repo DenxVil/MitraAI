@@ -109,7 +109,7 @@ jobs:
           imageToDeploy: ${{ needs.build-and-push.outputs.image }}
           # If GHCR is private, supply registry credentials so Azure can pull
           registryServer: ghcr.io
-          registryUsername: ${{ secrets.GHCR_USERNAME }}
+          registryUsername: ${{ secrets.GHCR_USERNAME }} 
           registryPassword: ${{ secrets.GHCR_PAT }}
           environmentVariables: |
             ENVIRONMENT=production
@@ -123,7 +123,7 @@ jobs:
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ Deployment successful"
+            echo "✅ Deployment  successful"
           else
             echo "❌ Deployment failed"
           fi
