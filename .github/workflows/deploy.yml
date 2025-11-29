@@ -18,61 +18,74 @@ jobs:
       contents: read
       packages: write
       id-token: write
-    # expose the full image (including tag) as a job output so deploy can use it exactly
     outputs:
       image: ${{ steps.set-image-output.outputs.image }}
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - id: set-image
-      name: Set IMAGE_NAME (lowercase)
-      run: |
-        # produce a lowercase owner/repo (e.g. denxvil/mitraai)
-        image_name=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-        echo "image_name=$image_name" >> $GITHUB_OUTPUT
+      - id: set-image
+        name: Set IMAGE_NAME (lowercase)
+        run: |
+          image_name=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          echo "image_name=$image_name" >> $GITHUB_OUTPUT
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Log in to GHCR
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      # Prefer using GHCR_PAT if you set it; otherwise fallback to GITHUB_TOKEN (requires packages: write).
+      - name: Log in to GHCR (PAT)
+        if: ${{ secrets.GHCR_PAT != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_PAT }}
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        # use the lowercase image name produced above
-        images: ${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=sha
-          type=raw,value={{sha}}
+      - name: Log in to GHCR (GITHUB_TOKEN fallback)
+        if: ${{ secrets.GHCR_PAT == '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value={{sha}}
 
-    - name: Set image output (full image reference)
-      id: set-image-output
-      run: |
-        # use the same lowercase name and github.sha as the tag to be deterministic
-        full_image="${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}:${{ github.sha }}"
-        echo "image=$full_image" >> $GITHUB_OUTPUT
+      - name: Build and push Docker image (includes explicit sha tag)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Set image output (full image reference)
+        id: set-image-output
+        run: |
+          full_image="${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}:${{ github.sha }}"
+          echo "image=$full_image" >> $GITHUB_OUTPUT
+
+      - name: Verify pushed image is pullable
+        run: |
+          echo "Attempting to docker pull ${{ steps.set-image-output.outputs.image }}"
+          docker pull ${{ steps.set-image-output.outputs.image }} || (echo "docker pull failed" && docker images --filter=reference="${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}*" --format "{{.Repository}}:{{.Tag}} {{.ID}}" && exit 1)
 
   deploy-azure:
     name: Deploy to Azure Container Apps
@@ -83,34 +96,34 @@ jobs:
       url: https://mitra-ai.azurewebsites.net
 
     steps:
-    - name: Azure Login
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: Deploy to Azure Container Apps
-      uses: azure/container-apps-deploy-action@v1
-      with:
-        containerAppName: mitra-ai
-        resourceGroup: ${{ secrets.AZURE_RESOURCE_GROUP }}
-        imageToDeploy: ${{ needs.build-and-push.outputs.image }}
-        # If the GHCR image is private, supply these so Azure can pull it
-        registryServer: ghcr.io
-        registryUsername: ${{ secrets.GHCR_USERNAME }}
-        registryPassword: ${{ secrets.GHCR_PAT }}
-        environmentVariables: |
-          ENVIRONMENT=production
-          LOG_LEVEL=INFO
-        secrets: |
-          telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}
-          azure-openai-api-key=${{ secrets.AZURE_OPENAI_API_KEY }}
-          azure-openai-endpoint=${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      - name: Deploy to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          containerAppName: mitra-ai
+          resourceGroup: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          imageToDeploy: ${{ needs.build-and-push.outputs.image }}
+          # If GHCR is private, supply registry credentials so Azure can pull
+          registryServer: ghcr.io
+          registryUsername: ${{ secrets.GHCR_USERNAME }}
+          registryPassword: ${{ secrets.GHCR_PAT }}
+          environmentVariables: |
+            ENVIRONMENT=production
+            LOG_LEVEL=INFO
+          secrets: |
+            telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            azure-openai-api-key=${{ secrets.AZURE_OPENAI_API_KEY }}
+            azure-openai-endpoint=${{ secrets.AZURE_OPENAI_ENDPOINT }}
 
-    - name: Notify deployment status
-      if: always()
-      run: |
-        if [ "${{ job.status }}" == "success" ]; then
-          echo "✅ Deployment successful"
-        else
-          echo "❌ Deployment failed"
-        fi
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment successful"
+          else
+            echo "❌ Deployment failed"
+          fi
