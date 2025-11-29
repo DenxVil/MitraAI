@@ -5,8 +5,20 @@ accelerate>=0.24.0
 bitsandbytes>=0.41.0
 sentencepiece>=0.1.99
 
+# Fine-tuning and Training
+peft>=0.7.0
+trl>=0.7.0
+datasets>=2.15.0
+
+# Vector Store (for RAG)
+faiss-cpu>=1.7.4
+
 # Telegram Bot
 python-telegram-bot>=20.6
+
+# Web Server (for webhooks)
+fastapi>=0.104.0
+uvicorn>=0.24.0
 
 # Logging and Monitoring
 structlog>=23.2.0
@@ -21,6 +33,9 @@ pydantic-settings>=2.1.0
 # HTTP and API
 aiohttp>=3.9.0
 httpx>=0.25.0
+
+# CLI
+click>=8.1.0
 
 # Utilities
 tenacity>=8.2.3
