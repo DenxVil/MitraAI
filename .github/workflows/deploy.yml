@@ -76,6 +76,8 @@ jobs:
     name: Pre-flight Validation
     runs-on: ubuntu-latest
     if: ${{ github.event.inputs.skip_validation != 'true' }}
+    permissions:
+      contents: read
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
       image_name_lower: ${{ steps.set-image-name.outputs.image_name_lower }}
@@ -486,6 +488,9 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-latest
     if: ${{ always() && needs.build.result == 'success' }}
+    permissions:
+      contents: read
+      id-token: write
     environment:
       name: ${{ github.event.inputs.environment || (startsWith(github.ref, 'refs/tags/v') && 'production' || 'staging') }}
       url: ${{ steps.get-app-url.outputs.url }}
@@ -808,6 +813,7 @@ jobs:
     needs: [preflight, build, deploy]
     runs-on: ubuntu-latest
     if: always()
+    permissions: {}
 
     steps:
       - name: Generate deployment summary
