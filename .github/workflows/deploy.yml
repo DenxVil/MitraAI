@@ -18,21 +18,31 @@ jobs:
     permissions:
       contents: read
       packages: write
-    
+    # expose a job output with the lowercased image name
+    outputs:
+      image_name: ${{ steps.set-image.outputs.image_name }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
+    # set a lowercase image name and export it as a step output
+    - id: set-image
+      name: Set IMAGE_NAME (lowercase)
+      run: |
+        image_name=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+        echo "image_name=$image_name" >> $GITHUB_OUTPUT
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-    
+
     - name: Log in to Container Registry
       uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    
+
     - name: Extract metadata
       id: meta
       uses: docker/metadata-action@v5
@@ -44,7 +54,7 @@ jobs:
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=sha
-    
+
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
@@ -62,19 +72,20 @@ jobs:
     environment:
       name: production
       url: https://mitra-ai.azurewebsites.net
-    
+
     steps:
     - name: Azure Login
       uses: azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
-    
+
     - name: Deploy to Azure Container Apps
       uses: azure/container-apps-deploy-action@v1
       with:
         containerAppName: mitra-ai
         resourceGroup: ${{ secrets.AZURE_RESOURCE_GROUP }}
-        imageToDeploy: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        # use the lowercased image name produced by the build job
+        imageToDeploy: ${{ env.REGISTRY }}/${{ needs.build-and-push.outputs.image_name }}:${{ github.sha }}
         environmentVariables: |
           ENVIRONMENT=production
           LOG_LEVEL=INFO
@@ -83,7 +94,7 @@ jobs:
           azure-openai-api-key=${{ secrets.AZURE_OPENAI_API_KEY }}
           azure-openai-endpoint=${{ secrets.AZURE_OPENAI_ENDPOINT }}
       continue-on-error: true
-    
+
     - name: Notify deployment status
       if: always()
       run: |
