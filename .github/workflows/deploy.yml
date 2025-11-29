@@ -48,7 +48,7 @@ on:
         type: boolean
 
 env:
-  REGISTRY: ghcr. io
+  REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   CONTAINER_APP_NAME: mitra-ai
   AZURE_CONTAINER_ENVIRONMENT: mitra-env
