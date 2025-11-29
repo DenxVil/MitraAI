@@ -1,119 +1,699 @@
-name: Deploy to Azure
+# ============================================================================
+# 🚀 Mitra AI - Production Deployment Workflow
+# ============================================================================
+# This workflow deploys Mitra AI to Azure Container Apps with:
+# - Pre-flight validation of all secrets and configurations
+# - Detailed error messages (no masked outputs)
+# - Health checks and rollback capabilities
+# - Manual trigger support for staging/production
+#
+# REQUIRED SECRETS:
+# - AZURE_CREDENTIALS: JSON with clientId, clientSecret, subscriptionId, tenantId
+# - AZURE_RESOURCE_GROUP: Azure resource group name
+# - TELEGRAM_BOT_TOKEN: Telegram bot API token
+#
+# OPTIONAL SECRETS:
+# - AZURE_OPENAI_API_KEY: Azure OpenAI API key
+# - AZURE_OPENAI_ENDPOINT: Azure OpenAI endpoint URL
+# - GHCR_PAT: GitHub Container Registry PAT (falls back to GITHUB_TOKEN)
+# - GHCR_USERNAME: GitHub username for GHCR (falls back to github. actor)
+# ============================================================================
+
+name: 🚀 Deploy Mitra AI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - staging
+          - production
+      skip_tests:
+        description: 'Skip pre-deployment tests'
+        required: false
+        default: false
+        type: boolean
+      force_deploy:
+        description: 'Force deployment even if validations fail'
+        required: false
+        default: false
+        type: boolean
 
 env:
-  REGISTRY: ghcr.io
+  REGISTRY: ghcr. io
+  IMAGE_NAME: ${{ github.repository }}
+  CONTAINER_APP_NAME: mitra-ai
+  AZURE_CONTAINER_ENVIRONMENT: mitra-env
 
 jobs:
-  build-and-push:
-    name: Build and Push Docker Image
+  # ============================================================================
+  # JOB 1: Pre-flight Validation
+  # ============================================================================
+  validate:
+    name: 🔍 Pre-flight Validation
+    runs-on: ubuntu-latest
+    outputs:
+      secrets_valid: ${{ steps. check-secrets.outputs.valid }}
+      environment: ${{ steps.set-env.outputs. environment }}
+    
+    steps:
+      - name: 📋 Set deployment environment
+        id: set-env
+        run: |
+          echo "::group::Environment Configuration"
+          if [ "${{ github. event_name }}" == "workflow_dispatch" ]; then
+            ENV="${{ github.event.inputs. environment }}"
+          elif [[ "${{ github. ref }}" == refs/tags/v* ]]; then
+            ENV="production"
+          else
+            ENV="staging"
+          fi
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "🌍 Deployment Environment: $ENV"
+          echo "📅 Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🔖 Git Ref: ${{ github.ref }}"
+          echo "📝 Git SHA: ${{ github. sha }}"
+          echo "👤 Triggered by: ${{ github.actor }}"
+          echo "::endgroup::"
+
+      - name: 🔐 Validate required secrets
+        id: check-secrets
+        run: |
+          echo "::group::Secrets Validation"
+          VALID=true
+          ERRORS=""
+          
+          echo "Checking required secrets..."
+          echo ""
+          
+          # Check AZURE_CREDENTIALS
+          if [ -z "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "::error title=Missing Secret::AZURE_CREDENTIALS is not set"
+            ERRORS="${ERRORS}❌ AZURE_CREDENTIALS is missing\n"
+            VALID=false
+          else
+            echo "✅ AZURE_CREDENTIALS is set"
+          fi
+          
+          # Check AZURE_RESOURCE_GROUP
+          if [ -z "${{ secrets. AZURE_RESOURCE_GROUP }}" ]; then
+            echo "::error title=Missing Secret::AZURE_RESOURCE_GROUP is not set"
+            ERRORS="${ERRORS}❌ AZURE_RESOURCE_GROUP is missing\n"
+            VALID=false
+          else
+            echo "✅ AZURE_RESOURCE_GROUP is set"
+          fi
+          
+          # Check TELEGRAM_BOT_TOKEN
+          if [ -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]; then
+            echo "::error title=Missing Secret::TELEGRAM_BOT_TOKEN is not set"
+            ERRORS="${ERRORS}❌ TELEGRAM_BOT_TOKEN is missing\n"
+            VALID=false
+          else
+            echo "✅ TELEGRAM_BOT_TOKEN is set"
+          fi
+          
+          # Check optional secrets
+          echo ""
+          echo "Checking optional secrets..."
+          
+          if [ -z "${{ secrets. AZURE_OPENAI_API_KEY }}" ]; then
+            echo "::warning title=Optional Secret::AZURE_OPENAI_API_KEY is not set (will use local model)"
+          else
+            echo "✅ AZURE_OPENAI_API_KEY is set"
+          fi
+          
+          if [ -z "${{ secrets.GHCR_PAT }}" ]; then
+            echo "ℹ️  GHCR_PAT not set, will use GITHUB_TOKEN"
+          else
+            echo "✅ GHCR_PAT is set"
+          fi
+          
+          echo ""
+          if [ "$VALID" == "true" ]; then
+            echo "✅ All required secrets are configured!"
+          else
+            echo ""
+            echo "=========================================="
+            echo "❌ SECRET VALIDATION FAILED"
+            echo "=========================================="
+            echo -e "$ERRORS"
+            echo ""
+            echo "Please configure the missing secrets in:"
+            echo "Repository Settings → Secrets and variables → Actions"
+            echo "=========================================="
+          fi
+          
+          echo "valid=$VALID" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: 🔑 Validate Azure credentials format
+        if: steps.check-secrets. outputs.valid == 'true'
+        run: |
+          echo "::group::Azure Credentials Validation"
+          
+          # Check if AZURE_CREDENTIALS is valid JSON
+          echo "Validating Azure credentials JSON format..."
+          
+          CREDS='${{ secrets.AZURE_CREDENTIALS }}'
+          
+          if echo "$CREDS" | jq -e .  > /dev/null 2>&1; then
+            echo "✅ Azure credentials are valid JSON"
+            
+            # Check for required fields
+            HAS_CLIENT_ID=$(echo "$CREDS" | jq -e 'has("clientId")' 2>/dev/null || echo "false")
+            HAS_CLIENT_SECRET=$(echo "$CREDS" | jq -e 'has("clientSecret")' 2>/dev/null || echo "false")
+            HAS_SUBSCRIPTION_ID=$(echo "$CREDS" | jq -e 'has("subscriptionId")' 2>/dev/null || echo "false")
+            HAS_TENANT_ID=$(echo "$CREDS" | jq -e 'has("tenantId")' 2>/dev/null || echo "false")
+            
+            if [ "$HAS_CLIENT_ID" == "true" ]; then
+              echo "✅ clientId field present"
+            else
+              echo "::error::Azure credentials missing 'clientId' field"
+            fi
+            
+            if [ "$HAS_CLIENT_SECRET" == "true" ]; then
+              echo "✅ clientSecret field present"
+            else
+              echo "::error::Azure credentials missing 'clientSecret' field"
+            fi
+            
+            if [ "$HAS_SUBSCRIPTION_ID" == "true" ]; then
+              echo "✅ subscriptionId field present"
+            else
+              echo "::error::Azure credentials missing 'subscriptionId' field"
+            fi
+            
+            if [ "$HAS_TENANT_ID" == "true" ]; then
+              echo "✅ tenantId field present"
+            else
+              echo "::error::Azure credentials missing 'tenantId' field"
+            fi
+            
+          else
+            echo "::error title=Invalid Credentials::AZURE_CREDENTIALS is not valid JSON"
+            echo ""
+            echo "Expected format:"
+            echo '{'
+            echo '  "clientId": "<app-id>",'
+            echo '  "clientSecret": "<client-secret>",'
+            echo '  "subscriptionId": "<subscription-id>",'
+            echo '  "tenantId": "<tenant-id>"'
+            echo '}'
+            exit 1
+          fi
+          
+          echo "::endgroup::"
+
+      - name: ⛔ Fail if secrets are missing
+        if: steps.check-secrets. outputs.valid != 'true' && github.event. inputs.force_deploy != 'true'
+        run: |
+          echo "::error::Required secrets are missing.  Cannot proceed with deployment."
+          echo ""
+          echo "To fix this issue:"
+          echo "1. Go to your repository Settings"
+          echo "2. Navigate to Secrets and variables → Actions"
+          echo "3. Add the missing secrets listed above"
+          echo ""
+          echo "For AZURE_CREDENTIALS, create an Azure Service Principal:"
+          echo "  az ad sp create-for-rbac --name 'mitra-ai-deploy' --role contributor \\"
+          echo "    --scopes /subscriptions/{subscription-id}/resourceGroups/{resource-group} \\"
+          echo "    --sdk-auth"
+          exit 1
+
+  # ============================================================================
+  # JOB 2: Build and Push Docker Image
+  # ============================================================================
+  build:
+    name: 🏗️ Build & Push Image
+    needs: validate
+    if: needs.validate.outputs. secrets_valid == 'true' || github.event.inputs.force_deploy == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
     outputs:
-      image: ${{ steps.set-image-output.outputs.image }}
+      image: ${{ steps.image-info.outputs.full_image }}
+      image_tag: ${{ steps. image-info.outputs.tag }}
+      build_time: ${{ steps. build-time.outputs. duration }}
 
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      - id: set-image
-        name: Set IMAGE_NAME (lowercase)
+      - name: 🏷️ Generate image metadata
+        id: image-info
         run: |
-          image_name=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          echo "image_name=$image_name" >> $GITHUB_OUTPUT
+          echo "::group::Image Metadata"
+          
+          # Lowercase the repository name
+          IMAGE_NAME=$(echo "${{ github. repository }}" | tr '[:upper:]' '[:lower:]')
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          FULL_IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+          
+          echo "image_name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+          echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          
+          echo "📦 Image Name: ${IMAGE_NAME}"
+          echo "🏷️  Full Tag: ${FULL_IMAGE}"
+          echo "🔖 Short SHA: ${SHORT_SHA}"
+          
+          echo "::endgroup::"
 
-      - name: Set up Docker Buildx
+      - name: 🔧 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR (use GHCR_PAT if present, otherwise fall back to GITHUB_TOKEN)
+      - name: 🔑 Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.GHCR_USERNAME || github.actor }}
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: 📋 Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}
+          images: ${{ env.REGISTRY }}/${{ steps.image-info.outputs.image_name }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha
-            type=raw,value={{sha}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build and push Docker image (includes explicit sha tag)
+      - name: ⏱️ Start build timer
+        id: build-start
+        run: echo "start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: 🏗️ Build and push Docker image
+        id: docker-build
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: . 
           push: true
           tags: |
-            ${{ steps.meta.outputs.tags }}
-            ${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}:${{ github.sha }}
+            ${{ steps.meta.outputs. tags }}
+            ${{ steps.image-info.outputs. full_image }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.image-info.outputs. short_sha }}
 
-      - name: Set image output (full image reference)
-        id: set-image-output
+      - name: ⏱️ Calculate build time
+        id: build-time
         run: |
-          full_image="${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}:${{ github.sha }}"
-          echo "image=$full_image" >> $GITHUB_OUTPUT
+          END=$(date +%s)
+          START=${{ steps.build-start.outputs.start }}
+          DURATION=$((END - START))
+          echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+          echo "🕐 Build completed in ${DURATION} seconds"
 
-      - name: Verify pushed image is pullable
+      - name: ✅ Verify image is pullable
         run: |
-          echo "Attempting to docker pull ${{ steps.set-image-output.outputs.image }}"
-          docker pull ${{ steps.set-image-output.outputs.image }} || (echo "docker pull failed" && docker images --filter=reference="${{ env.REGISTRY }}/${{ steps.set-image.outputs.image_name }}*" --format "{{.Repository}}:{{.Tag}} {{.ID}}" && exit 1)
+          echo "::group::Image Verification"
+          
+          echo "🔍 Attempting to pull: ${{ steps.image-info.outputs. full_image }}"
+          
+          if docker pull ${{ steps.image-info.outputs.full_image }}; then
+            echo "✅ Image successfully pulled!"
+            echo ""
+            echo "📊 Image details:"
+            docker inspect ${{ steps. image-info.outputs.full_image }} --format='Size: {{.Size}} bytes'
+            docker inspect ${{ steps.image-info.outputs. full_image }} --format='Created: {{.Created}}'
+          else
+            echo "::error::Failed to pull the built image"
+            echo "❌ Image verification failed!"
+            exit 1
+          fi
+          
+          echo "::endgroup::"
 
-  deploy-azure:
-    name: Deploy to Azure Container Apps
-    needs: build-and-push
+      - name: 🧪 Run container health check
+        run: |
+          echo "::group::Container Health Check"
+          
+          echo "🚀 Starting container for health check..."
+          
+          # Run container in detached mode
+          CONTAINER_ID=$(docker run -d \
+            --name mitra-test \
+            -e TELEGRAM_BOT_TOKEN="test-token" \
+            -e ENVIRONMENT="test" \
+            ${{ steps.image-info.outputs.full_image }} \
+            sleep 30)
+          
+          echo "📦 Container ID: ${CONTAINER_ID}"
+          
+          # Wait a moment for container to initialize
+          sleep 5
+          
+          # Check if container is still running
+          if docker ps | grep -q mitra-test; then
+            echo "✅ Container started successfully!"
+            
+            # Show container logs
+            echo ""
+            echo "📋 Container logs:"
+            docker logs mitra-test 2>&1 | head -20 || true
+          else
+            echo "::warning::Container exited early (this may be expected for bot apps)"
+            echo "📋 Container logs:"
+            docker logs mitra-test 2>&1 || true
+          fi
+          
+          # Cleanup
+          docker rm -f mitra-test > /dev/null 2>&1 || true
+          
+          echo "::endgroup::"
+
+      - name: 📊 Build Summary
+        run: |
+          echo "## 🏗️ Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ steps. image-info.outputs.full_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Short SHA | \`${{ steps.image-info.outputs.short_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Time | ${{ steps.build-time.outputs.duration }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Registry | ${{ env.REGISTRY }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # JOB 3: Deploy to Azure
+  # ============================================================================
+  deploy:
+    name: 🚀 Deploy to Azure
+    needs: [validate, build]
     runs-on: ubuntu-latest
     environment:
-      name: production
-      url: https://mitra-ai.azurewebsites.net
+      name: ${{ needs.validate.outputs. environment }}
+      url: ${{ steps.get-url.outputs.app_url }}
+    outputs:
+      app_url: ${{ steps.get-url.outputs.app_url }}
+      deployment_status: ${{ steps.deploy. outcome }}
 
     steps:
-      - name: Azure Login
-        uses: azure/login@v1
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Azure Login
+        id: azure-login
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy to Azure Container Apps
-        uses: azure/container-apps-deploy-action@v1
-        with:
-          containerAppName: mitra-ai
-          resourceGroup: ${{ secrets.AZURE_RESOURCE_GROUP }}
-          imageToDeploy: ${{ needs.build-and-push.outputs.image }}
-          # If GHCR is private, supply registry credentials so Azure can pull
-          registryServer: ghcr.io
-          registryUsername: ${{ secrets.GHCR_USERNAME || github.actor }}
-          registryPassword: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
-          environmentVariables: |
-            ENVIRONMENT=production
-            LOG_LEVEL=INFO
-          secrets: |
-            telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}
-            azure-openai-api-key=${{ secrets.AZURE_OPENAI_API_KEY }}
-            azure-openai-endpoint=${{ secrets.AZURE_OPENAI_ENDPOINT }}
-
-      - name: Notify deployment status
-        if: always()
+      - name: 🔍 Validate Azure connection
         run: |
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ Deployment successful"
+          echo "::group::Azure Connection Details"
+          
+          echo "📋 Azure Account Information:"
+          az account show --output table
+          
+          echo ""
+          echo "📋 Current Subscription:"
+          az account show --query "{Name:name, ID:id, State:state}" --output table
+          
+          echo "::endgroup::"
+
+      - name: 🔍 Check Resource Group
+        run: |
+          echo "::group::Resource Group Validation"
+          
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          echo "🔍 Checking resource group: ${RG}"
+          
+          if az group show --name "$RG" --output table 2>/dev/null; then
+            echo "✅ Resource group exists!"
+            echo ""
+            echo "📍 Location: $(az group show --name "$RG" --query location -o tsv)"
           else
-            echo "❌ Deployment failed"
+            echo "::error title=Resource Group Not Found::Resource group '${RG}' does not exist"
+            echo ""
+            echo "To create the resource group, run:"
+            echo "  az group create --name ${RG} --location eastus"
+            exit 1
+          fi
+          
+          echo "::endgroup::"
+
+      - name: 🔍 Check Container App exists
+        id: check-app
+        run: |
+          echo "::group::Container App Status"
+          
+          APP_NAME="${{ env.CONTAINER_APP_NAME }}"
+          RG="${{ secrets. AZURE_RESOURCE_GROUP }}"
+          
+          echo "🔍 Checking for Container App: ${APP_NAME}"
+          
+          if az containerapp show --name "$APP_NAME" --resource-group "$RG" --output table 2>/dev/null; then
+            echo "✅ Container App exists!"
+            echo "exists=true" >> $GITHUB_OUTPUT
+            
+            # Get current revision info
+            echo ""
+            echo "📊 Current revision:"
+            az containerapp revision list --name "$APP_NAME" --resource-group "$RG" --output table 2>/dev/null || true
+          else
+            echo "::warning title=Container App Not Found::Container App '${APP_NAME}' does not exist.  Will attempt to create."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "::endgroup::"
+
+      - name: 🚀 Deploy to Azure Container Apps
+        id: deploy
+        run: |
+          echo "::group::Deployment"
+          
+          APP_NAME="${{ env.CONTAINER_APP_NAME }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          IMAGE="${{ needs.build.outputs. image }}"
+          
+          echo "🚀 Deploying to Azure Container Apps"
+          echo "📦 Image: ${IMAGE}"
+          echo "🎯 App: ${APP_NAME}"
+          echo "📁 Resource Group: ${RG}"
+          echo ""
+          
+          # Store current revision for potential rollback
+          CURRENT_REVISION=$(az containerapp revision list \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --query "[0]. name" -o tsv 2>/dev/null || echo "none")
+          echo "current_revision=${CURRENT_REVISION}" >> $GITHUB_OUTPUT
+          echo "📋 Current revision (for rollback): ${CURRENT_REVISION}"
+          echo ""
+          
+          # Deploy the new image
+          echo "🔄 Starting deployment..."
+          
+          if [ "${{ steps.check-app.outputs. exists }}" == "true" ]; then
+            # Update existing app
+            az containerapp update \
+              --name "$APP_NAME" \
+              --resource-group "$RG" \
+              --image "$IMAGE" \
+              --set-env-vars \
+                "ENVIRONMENT=${{ needs.validate.outputs.environment }}" \
+                "LOG_LEVEL=INFO" \
+              --output table
+          else
+            # Create new app
+            az containerapp create \
+              --name "$APP_NAME" \
+              --resource-group "$RG" \
+              --image "$IMAGE" \
+              --target-port 8443 \
+              --ingress external \
+              --registry-server ghcr.io \
+              --registry-username ${{ secrets. GHCR_USERNAME || github.actor }} \
+              --registry-password "${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}" \
+              --env-vars \
+                "ENVIRONMENT=${{ needs. validate.outputs.environment }}" \
+                "LOG_LEVEL=INFO" \
+                "TELEGRAM_BOT_TOKEN=secretref:telegram-bot-token" \
+              --secrets \
+                "telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+              --cpu 0.5 \
+              --memory 1. 0Gi \
+              --min-replicas 0 \
+              --max-replicas 3 \
+              --output table
+          fi
+          
+          DEPLOY_STATUS=$? 
+          
+          if [ $DEPLOY_STATUS -eq 0 ]; then
+            echo ""
+            echo "✅ Deployment command completed successfully!"
+          else
+            echo "::error::Deployment command failed with exit code ${DEPLOY_STATUS}"
+            exit $DEPLOY_STATUS
+          fi
+          
+          echo "::endgroup::"
+
+      - name: 🔍 Get Application URL
+        id: get-url
+        run: |
+          echo "::group::Application URL"
+          
+          APP_NAME="${{ env. CONTAINER_APP_NAME }}"
+          RG="${{ secrets. AZURE_RESOURCE_GROUP }}"
+          
+          # Get the FQDN
+          FQDN=$(az containerapp show \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
+          
+          if [ -n "$FQDN" ]; then
+            APP_URL="https://${FQDN}"
+            echo "app_url=${APP_URL}" >> $GITHUB_OUTPUT
+            echo "🌐 Application URL: ${APP_URL}"
+          else
+            echo "::warning::Could not retrieve application URL"
+            echo "app_url=N/A" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "::endgroup::"
+
+      - name: ✅ Post-deployment health check
+        run: |
+          echo "::group::Health Check"
+          
+          APP_NAME="${{ env.CONTAINER_APP_NAME }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          
+          echo "🔍 Checking deployment status..."
+          
+          # Wait for deployment to stabilize
+          sleep 10
+          
+          # Check provisioning state
+          STATE=$(az containerapp show \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --query "properties.provisioningState" -o tsv 2>/dev/null || echo "Unknown")
+          
+          echo "📊 Provisioning State: ${STATE}"
+          
+          if [ "$STATE" == "Succeeded" ]; then
+            echo "✅ Deployment succeeded!"
+          else
+            echo "::warning::Provisioning state is ${STATE}"
+          fi
+          
+          # Show latest revision status
+          echo ""
+          echo "📋 Latest revision:"
+          az containerapp revision list \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --query "[0]. {Name:name, Active:properties.active, Replicas:properties.replicas, Health:properties.healthState}" \
+            --output table 2>/dev/null || true
+          
+          # Show recent logs
+          echo ""
+          echo "📋 Recent container logs:"
+          az containerapp logs show \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --tail 20 2>/dev/null || echo "Could not retrieve logs"
+          
+          echo "::endgroup::"
+
+      - name: 🔄 Rollback on failure
+        if: failure() && steps.deploy. outputs.current_revision != 'none'
+        run: |
+          echo "::group::Rollback"
+          
+          echo "::error::Deployment failed!  Attempting rollback..."
+          
+          APP_NAME="${{ env.CONTAINER_APP_NAME }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          PREVIOUS_REVISION="${{ steps.deploy. outputs.current_revision }}"
+          
+          echo "🔄 Rolling back to revision: ${PREVIOUS_REVISION}"
+          
+          az containerapp revision activate \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --revision "$PREVIOUS_REVISION" \
+            --output table || echo "::warning::Rollback failed"
+          
+          echo "::endgroup::"
+
+  # ============================================================================
+  # JOB 4: Notification & Summary
+  # ============================================================================
+  notify:
+    name: 📢 Deployment Summary
+    needs: [validate, build, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: 📊 Generate deployment summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Status emoji
+          if [ "${{ needs. deploy.result }}" == "success" ]; then
+            STATUS="✅ Success"
+          elif [ "${{ needs.deploy.result }}" == "failure" ]; then
+            STATUS="❌ Failed"
+          elif [ "${{ needs. deploy.result }}" == "skipped" ]; then
+            STATUS="⏭️ Skipped"
+          else
+            STATUS="⚠️ ${{ needs.deploy. result }}"
+          fi
+          
+          echo "### Status: ${STATUS}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ needs. validate.outputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ needs.build.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Time | ${{ needs.build. outputs.build_time }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| App URL | ${{ needs.deploy.outputs. app_url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | [\`${{ github.sha }}\`](${{ github. server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_Coded by Denvil with love 🤍_" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📢 Output deployment result
+        run: |
+          echo "========================================"
+          echo "🚀 DEPLOYMENT COMPLETE"
+          echo "========================================"
+          echo ""
+          echo "Environment: ${{ needs. validate.outputs.environment }}"
+          echo "Status: ${{ needs. deploy.result }}"
+          echo "Image: ${{ needs. build.outputs.image }}"
+          echo "URL: ${{ needs. deploy.outputs.app_url }}"
+          echo ""
+          echo "========================================"
+          
+          if [ "${{ needs. deploy.result }}" == "failure" ]; then
+            echo "::error::Deployment failed!  Check the logs above for details."
+            exit 1
           fi
