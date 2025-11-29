@@ -343,7 +343,7 @@ jobs:
             --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
             --progress=plain \
-            . 2>&1
+            .
           
           echo ""
           echo "Build completed. Image details:"
@@ -614,27 +614,33 @@ jobs:
           echo "Setting application secrets..."
           
           # Set Telegram bot token
-          az containerapp secret set \
+          if ! az containerapp secret set \
             --name "$APP_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --secrets telegram-bot-token="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
-            --output none 2>/dev/null || echo "::warning::Failed to set telegram-bot-token secret"
+            --output none; then
+            echo "::warning title=Secret Configuration Warning::Failed to set telegram-bot-token secret. Check Container App permissions."
+          fi
           
           # Set optional Azure OpenAI secrets if provided
           if [ -n "${{ secrets.AZURE_OPENAI_API_KEY }}" ]; then
-            az containerapp secret set \
+            if ! az containerapp secret set \
               --name "$APP_NAME" \
               --resource-group "$RESOURCE_GROUP" \
               --secrets azure-openai-api-key="${{ secrets.AZURE_OPENAI_API_KEY }}" \
-              --output none 2>/dev/null || echo "::warning::Failed to set azure-openai-api-key secret"
+              --output none; then
+              echo "::warning title=Secret Configuration Warning::Failed to set azure-openai-api-key secret."
+            fi
           fi
           
           if [ -n "${{ secrets.AZURE_OPENAI_ENDPOINT }}" ]; then
-            az containerapp secret set \
+            if ! az containerapp secret set \
               --name "$APP_NAME" \
               --resource-group "$RESOURCE_GROUP" \
               --secrets azure-openai-endpoint="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
-              --output none 2>/dev/null || echo "::warning::Failed to set azure-openai-endpoint secret"
+              --output none; then
+              echo "::warning title=Secret Configuration Warning::Failed to set azure-openai-endpoint secret."
+            fi
           fi
           
           echo "✅ Secrets configured"
@@ -780,16 +786,14 @@ jobs:
           
           echo "Attempting to rollback to previous image: $PREVIOUS_IMAGE"
           
-          az containerapp update \
+          if az containerapp update \
             --name "$APP_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --image "$PREVIOUS_IMAGE" \
-            --output none 2>/dev/null
-          
-          if [ $? -eq 0 ]; then
+            --output none; then
             echo "✅ Rollback completed successfully"
           else
-            echo "::error title=Rollback Failed::Failed to rollback to previous image."
+            echo "::error title=Rollback Failed::Failed to rollback to previous image. Manual intervention may be required."
           fi
           
           echo "::endgroup::"
