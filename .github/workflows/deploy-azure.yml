@@ -201,6 +201,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Force image name to lowercase
+        run: echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: 🏷️ Generate image metadata
         id: image-info
         run: |
