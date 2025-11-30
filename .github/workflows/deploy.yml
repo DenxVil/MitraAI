@@ -504,7 +504,21 @@ jobs:
           echo "🔄 Starting deployment..."
           
           if [ "${{ steps.check-app.outputs. exists }}" == "true" ]; then
-            # Update existing app
+            # Update existing app with secrets
+            echo "📝 Updating secrets..."
+            az containerapp secret set \
+              --name "$APP_NAME" \
+              --resource-group "$RG" \
+              --secrets "telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+              --output none
+            
+            if [ $? -ne 0 ]; then
+              echo "::error::Failed to update secrets"
+              exit 1
+            fi
+            echo "✅ Secrets updated successfully"
+            
+            echo "📝 Updating container app..."
             az containerapp update \
               --name "$APP_NAME" \
               --resource-group "$RG" \
@@ -512,9 +526,12 @@ jobs:
               --set-env-vars \
                 "ENVIRONMENT=${{ needs.validate.outputs.environment }}" \
                 "LOG_LEVEL=INFO" \
+                "TELEGRAM_BOT_TOKEN=secretref:telegram-bot-token" \
+              --query "{Name:name, Image:properties.template.containers[0].image, ProvisioningState:properties.provisioningState, LatestRevision:properties.latestRevisionName}" \
               --output table
           else
             # Create new app
+            echo "📝 Creating new container app..."
             az containerapp create \
               --name "$APP_NAME" \
               --resource-group "$RG" \
@@ -531,9 +548,10 @@ jobs:
               --secrets \
                 "telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
               --cpu 0.5 \
-              --memory 1. 0Gi \
+              --memory 1.0Gi \
               --min-replicas 0 \
               --max-replicas 3 \
+              --query "{Name:name, Image:properties.template.containers[0].image, ProvisioningState:properties.provisioningState, LatestRevision:properties.latestRevisionName}" \
               --output table
           fi
           
@@ -582,9 +600,11 @@ jobs:
           RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
           
           echo "🔍 Checking deployment status..."
+          echo ""
           
           # Wait for deployment to stabilize
-          sleep 10
+          echo "⏳ Waiting 30 seconds for container to stabilize..."
+          sleep 30
           
           # Check provisioning state
           STATE=$(az containerapp show \
@@ -595,27 +615,103 @@ jobs:
           echo "📊 Provisioning State: ${STATE}"
           
           if [ "$STATE" == "Succeeded" ]; then
-            echo "✅ Deployment succeeded!"
+            echo "✅ Deployment provisioning succeeded!"
           else
             echo "::warning::Provisioning state is ${STATE}"
           fi
           
-          # Show latest revision status
+          # Show app details with structured output
           echo ""
-          echo "📋 Latest revision:"
+          echo "📋 Container App Details:"
+          az containerapp show \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --query "{Name:name, Location:location, ProvisioningState:properties.provisioningState, RunningStatus:properties.runningStatus, LatestRevision:properties.latestRevisionName, FQDN:properties.configuration.ingress.fqdn}" \
+            --output table 2>/dev/null || echo "::warning::Could not get app details"
+          
+          # Show latest revision status with health info
+          echo ""
+          echo "📋 Latest revision status:"
           az containerapp revision list \
             --name "$APP_NAME" \
             --resource-group "$RG" \
-            --query "[0]. {Name:name, Active:properties.active, Replicas:properties.replicas, Health:properties.healthState}" \
-            --output table 2>/dev/null || true
+            --query "[0].{Name:name, Active:properties.active, Replicas:properties.replicas, Health:properties.healthState, RunningState:properties.runningState, CreatedTime:properties.createdTime}" \
+            --output table 2>/dev/null || echo "::warning::Could not get revision status"
           
-          # Show recent logs
+          # Get replica status to detect crash loops
           echo ""
-          echo "📋 Recent container logs:"
+          echo "📋 Checking replica status..."
+          LATEST_REVISION=$(az containerapp show \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --query "properties.latestRevisionName" -o tsv 2>/dev/null || echo "")
+          
+          if [ -n "$LATEST_REVISION" ]; then
+            REPLICA_COUNT=$(az containerapp revision show \
+              --name "$APP_NAME" \
+              --resource-group "$RG" \
+              --revision "$LATEST_REVISION" \
+              --query "properties.replicas" -o tsv 2>/dev/null || echo "0")
+            
+            HEALTH_STATE=$(az containerapp revision show \
+              --name "$APP_NAME" \
+              --resource-group "$RG" \
+              --revision "$LATEST_REVISION" \
+              --query "properties.healthState" -o tsv 2>/dev/null || echo "Unknown")
+            
+            RUNNING_STATE=$(az containerapp revision show \
+              --name "$APP_NAME" \
+              --resource-group "$RG" \
+              --revision "$LATEST_REVISION" \
+              --query "properties.runningState" -o tsv 2>/dev/null || echo "Unknown")
+            
+            echo "  Revision: $LATEST_REVISION"
+            echo "  Replicas: $REPLICA_COUNT"
+            echo "  Health State: $HEALTH_STATE"
+            echo "  Running State: $RUNNING_STATE"
+            
+            # Check for unhealthy state
+            if [ "$HEALTH_STATE" == "Unhealthy" ] || [ "$RUNNING_STATE" == "Failed" ]; then
+              echo "::error::Container is in an unhealthy state! Health: ${HEALTH_STATE}, Running: ${RUNNING_STATE}"
+            fi
+          fi
+          
+          echo "::endgroup::"
+
+      - name: 📋 Fetch container logs
+        if: always()
+        run: |
+          echo "::group::Container Logs"
+          
+          APP_NAME="${{ env.CONTAINER_APP_NAME }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          
+          echo "📋 Fetching recent container logs (last 50 lines)..."
+          echo ""
+          
+          # Get system logs
+          echo "=== System Logs ==="
           az containerapp logs show \
             --name "$APP_NAME" \
             --resource-group "$RG" \
-            --tail 20 2>/dev/null || echo "Could not retrieve logs"
+            --type system \
+            --tail 50 2>/dev/null || echo "Could not retrieve system logs"
+          
+          echo ""
+          echo "=== Console Logs ==="
+          az containerapp logs show \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --type console \
+            --tail 50 2>/dev/null || echo "Could not retrieve console logs"
+          
+          # Filter for errors if any logs were retrieved
+          echo ""
+          echo "=== Error Summary (if any) ==="
+          az containerapp logs show \
+            --name "$APP_NAME" \
+            --resource-group "$RG" \
+            --tail 100 2>/dev/null | grep -i -E "(error|exception|failed|crash|exit)" || echo "No obvious errors found in recent logs"
           
           echo "::endgroup::"
 
