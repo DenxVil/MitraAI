@@ -1,0 +1,314 @@
+# ============================================================================
+# 🚀 Mitra AI - Azure Deployment Workflow v3.0
+# ============================================================================
+# Coded by Denvil with love 🤍
+# FEATURES: Clean structure, proper secret management, health checks with
+# timeout, auto-rollback, multi-env support, vulnerability scanning,
+# notifications (Slack/Teams), cost-efficient scaling (0-5 replicas)
+#
+# REQUIRED SECRETS: AZURE_CREDENTIALS, AZURE_RESOURCE_GROUP, TELEGRAM_BOT_TOKEN
+# OPTIONAL SECRETS: TEAMS_WEBHOOK_URL, SLACK_WEBHOOK_URL, AZURE_CONTAINER_ENVIRONMENT
+# ============================================================================
+
+name: 🚀 Deploy Mitra AI to Azure
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy to environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options: [staging, production]
+      skip_tests:
+        description: 'Skip tests (not recommended)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  AZURE_CONTAINER_APP: mitra-ai
+  AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  AZURE_LOCATION: eastus
+
+# ============================================================================
+# JOB 1: Validate (5 min timeout)
+# ============================================================================
+jobs:
+  validate:
+    name: 🔍 Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      environment: ${{ steps.setup.outputs.environment }}
+      image_tag: ${{ steps.setup.outputs.image_tag }}
+    steps:
+      - name: 📋 Setup and validate
+        id: setup
+        run: |
+          # Determine environment
+          ENV="${{ github.event.inputs.environment || 'staging' }}"
+          [[ ! "$ENV" =~ ^(staging|production)$ ]] && { echo "::error::Invalid environment"; exit 1; }
+          
+          # Generate image tag
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "image_tag=${SHORT_SHA}-$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+          echo "🌍 Environment: $ENV | 🏷️ Tag: ${SHORT_SHA}"
+          
+          # Validate required secrets
+          ERRORS=0
+          [ -z '${{ secrets.AZURE_CREDENTIALS }}' ] && { echo "::error::AZURE_CREDENTIALS missing"; ERRORS=$((ERRORS+1)); }
+          [ -z "${{ secrets.AZURE_RESOURCE_GROUP }}" ] && { echo "::error::AZURE_RESOURCE_GROUP missing"; ERRORS=$((ERRORS+1)); }
+          [ -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && { echo "::error::TELEGRAM_BOT_TOKEN missing"; ERRORS=$((ERRORS+1)); }
+          [ $ERRORS -gt 0 ] && exit 1
+          echo "✅ All secrets validated"
+
+# ============================================================================
+# JOB 2: Test (10 min timeout)
+# ============================================================================
+  test:
+    name: 🧪 Test
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event.inputs.skip_tests != 'true'
+    outputs:
+      tests_passed: ${{ steps.test.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: 📦 Install and test
+        id: test
+        run: |
+          pip install -r requirements.txt pytest pytest-asyncio black flake8
+          black --check mitra/ main.py || echo "::warning::Formatting issues"
+          flake8 mitra/ main.py --max-line-length=100 --extend-ignore=E203,W503 || echo "::warning::Lint issues"
+          pytest tests/ -v --tb=short && echo "passed=true" >> $GITHUB_OUTPUT || echo "passed=false" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+# ============================================================================
+# JOB 3: Build (15 min timeout)
+# ============================================================================
+  build:
+    name: 🏗️ Build
+    needs: [validate, test]
+    if: always() && needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 🏗️ Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.validate.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: 📝 Set outputs
+        id: meta
+        run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.validate.outputs.image_tag }}" >> $GITHUB_OUTPUT
+      - name: 🔍 Scan vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.validate.outputs.image_tag }}
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true
+
+# ============================================================================
+# JOB 4: Deploy (20 min timeout)
+# ============================================================================
+  deploy:
+    name: 🚀 Deploy
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: ${{ needs.validate.outputs.environment }}
+      url: ${{ steps.url.outputs.app_url }}
+    outputs:
+      app_url: ${{ steps.url.outputs.app_url }}
+      revision_name: ${{ steps.deploy.outputs.revision_name }}
+      previous_revision: ${{ steps.deploy.outputs.previous_revision }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: 🚀 Deploy to Azure Container Apps
+        id: deploy
+        run: |
+          APP="${{ env.AZURE_CONTAINER_APP }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          IMAGE="${{ needs.build.outputs.image }}"
+          ENV="${{ needs.validate.outputs.environment }}"
+          
+          # Get previous revision for rollback
+          PREV=$(az containerapp show --name "$APP" --resource-group "$RG" \
+            --query "properties.latestRevisionName" -o tsv 2>/dev/null || echo "none")
+          echo "previous_revision=$PREV" >> $GITHUB_OUTPUT
+          echo "📋 Previous: $PREV | 📦 Deploying: $IMAGE"
+          
+          if az containerapp show --name "$APP" --resource-group "$RG" >/dev/null 2>&1; then
+            # Update existing app
+            az containerapp secret set --name "$APP" --resource-group "$RG" \
+              --secrets "telegram-token=${{ secrets.TELEGRAM_BOT_TOKEN }}" --output none
+            az containerapp update --name "$APP" --resource-group "$RG" --image "$IMAGE" \
+              --set-env-vars "ENVIRONMENT=$ENV" "LOG_LEVEL=INFO" "TELEGRAM_BOT_TOKEN=secretref:telegram-token" \
+              --min-replicas 0 --max-replicas 5 \
+              --scale-rule-name "http-scaling" --scale-rule-http-concurrency 50 \
+              --cpu 0.5 --memory 1.0Gi --output table
+          else
+            # Create new app
+            ENV_NAME="${{ secrets.AZURE_CONTAINER_ENVIRONMENT }}"
+            [ -z "$ENV_NAME" ] && ENV_NAME="mitra-env"
+            az containerapp create --name "$APP" --resource-group "$RG" --environment "$ENV_NAME" \
+              --image "$IMAGE" --registry-server "${{ env.REGISTRY }}" \
+              --registry-username "${{ github.actor }}" --registry-password "${{ secrets.GITHUB_TOKEN }}" \
+              --secrets "telegram-token=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+              --set-env-vars "ENVIRONMENT=$ENV" "LOG_LEVEL=INFO" "TELEGRAM_BOT_TOKEN=secretref:telegram-token" \
+              --min-replicas 0 --max-replicas 5 \
+              --scale-rule-name "http-scaling" --scale-rule-http-concurrency 50 \
+              --cpu 0.5 --memory 1.0Gi --ingress external --target-port 8443 --output table
+          fi
+          
+          NEW=$(az containerapp show --name "$APP" --resource-group "$RG" \
+            --query "properties.latestRevisionName" -o tsv)
+          echo "revision_name=$NEW" >> $GITHUB_OUTPUT
+          echo "✅ Deployed: $NEW"
+      - name: 🌐 Get URL
+        id: url
+        run: |
+          FQDN=$(az containerapp show --name "${{ env.AZURE_CONTAINER_APP }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          [ -n "$FQDN" ] && echo "app_url=https://${FQDN}" >> $GITHUB_OUTPUT || echo "app_url=" >> $GITHUB_OUTPUT
+
+# ============================================================================
+# JOB 5: Health Check (10 min timeout)
+# ============================================================================
+  health-check:
+    name: ❤️ Health Check
+    needs: [validate, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      healthy: ${{ steps.check.outputs.healthy }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: ❤️ Check revision health
+        id: check
+        run: |
+          APP="${{ env.AZURE_CONTAINER_APP }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          REV="${{ needs.deploy.outputs.revision_name }}"
+          
+          for i in 1 2 3 4 5; do
+            STATUS=$(az containerapp revision show --name "$APP" --resource-group "$RG" \
+              --revision "$REV" --query "properties.runningState" -o tsv 2>/dev/null || echo "Unknown")
+            HEALTH=$(az containerapp revision show --name "$APP" --resource-group "$RG" \
+              --revision "$REV" --query "properties.healthState" -o tsv 2>/dev/null || echo "Unknown")
+            echo "Attempt $i/5: Status=$STATUS, Health=$HEALTH"
+            
+            [ "$STATUS" == "Running" ] && [ "$HEALTH" == "Healthy" ] && { 
+              echo "✅ Healthy!"; echo "healthy=true" >> $GITHUB_OUTPUT; exit 0; }
+            [ "$STATUS" == "Failed" ] && { 
+              echo "::error::Failed"; echo "healthy=false" >> $GITHUB_OUTPUT; exit 1; }
+            sleep $((i * 10))
+          done
+          echo "::error::Timeout"; echo "healthy=false" >> $GITHUB_OUTPUT; exit 1
+      - name: 🌐 Check HTTP
+        if: needs.deploy.outputs.app_url != ''
+        run: |
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 --retry 3 \
+            "${{ needs.deploy.outputs.app_url }}/health" 2>/dev/null || echo "000")
+          [ "$HTTP" == "200" ] && echo "✅ HTTP 200 OK" || echo "::warning::HTTP $HTTP"
+      - name: 🔄 Rollback on failure
+        if: failure() && needs.deploy.outputs.previous_revision != 'none'
+        run: |
+          echo "::error::Rolling back to ${{ needs.deploy.outputs.previous_revision }}"
+          az containerapp revision activate --name "${{ env.AZURE_CONTAINER_APP }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --revision "${{ needs.deploy.outputs.previous_revision }}" --output table || true
+
+# ============================================================================
+# JOB 6: Notify (5 min timeout)
+# ============================================================================
+  notify:
+    name: 📢 Notify
+    needs: [validate, build, deploy, health-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    steps:
+      - name: 📊 Generate summary
+        run: |
+          [ "${{ needs.health-check.result }}" == "success" ] && { STATUS="✅ SUCCESS"; EMOJI="🟢"; } || \
+          [ "${{ needs.deploy.result }}" == "failure" ] && { STATUS="❌ FAILED"; EMOJI="🔴"; } || \
+          { STATUS="⚠️ PARTIAL"; EMOJI="🟠"; }
+          
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          # $EMOJI Mitra AI Deployment
+          | Property | Value |
+          |----------|-------|
+          | Status | $STATUS |
+          | Environment | \`${{ needs.validate.outputs.environment }}\` |
+          | Image | \`${{ needs.build.outputs.image }}\` |
+          | Revision | \`${{ needs.deploy.outputs.revision_name }}\` |
+          | URL | ${{ needs.deploy.outputs.app_url }} |
+          | Actor | @${{ github.actor }} |
+          | Commit | \`${{ github.sha }}\` |
+          ---
+          _Coded by Denvil with love 🤍_
+          EOF
+      - name: 📢 Notifications
+        run: |
+          [ "${{ needs.health-check.result }}" == "success" ] && MSG="✅ Deployed" || MSG="❌ Issues"
+          ENV="${{ needs.validate.outputs.environment }}"
+          URL="${{ needs.deploy.outputs.app_url }}"
+          
+          # Teams
+          [ -n "${{ secrets.TEAMS_WEBHOOK_URL }}" ] && curl -X POST "${{ secrets.TEAMS_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" -d "{\"text\":\"$MSG to $ENV: $URL\"}" 2>/dev/null || true
+          # Slack
+          [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ] && curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" -d "{\"text\":\"$MSG to $ENV: $URL\"}" 2>/dev/null || true
+          
+          echo "========================================"
+          [ "${{ needs.health-check.result }}" == "success" ] && echo "🎉 SUCCESS! URL: $URL" || echo "⚠️ Check logs"
+          echo "========================================"
+        continue-on-error: true
+
+# Coded by Denvil with love 🤍
