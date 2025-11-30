@@ -61,14 +61,18 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    # Cache Trivy DB to speed up scans
+    # Cache Trivy DB to speed up scans - refreshes weekly
+    - name: Get week number for cache key
+      id: week
+      run: echo "week=$(date +%Y-%U)" >> $GITHUB_OUTPUT
+
     - name: Cache Trivy vulnerability database
       uses: actions/cache@v4
       with:
         path: ~/.cache/trivy
-        key: trivy-db-${{ runner.os }}
+        key: trivy-db-${{ runner.os }}-${{ steps.week.outputs.week }}
         restore-keys: |
-          trivy-db-${{ runner.os }}
+          trivy-db-${{ runner.os }}-
     
     - name: Run Trivy vulnerability scanner
       id: trivy-scan

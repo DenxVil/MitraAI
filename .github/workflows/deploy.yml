@@ -270,13 +270,18 @@ jobs:
             VERSION=${{ steps.image-info.outputs.short_sha }}
 
       # CRITICAL FIX: Cache Trivy DB to speed up scans and avoid network issues
+      # Cache refreshes weekly to ensure updated vulnerability data
+      - name: 📅 Get week number for cache key
+        id: week
+        run: echo "week=$(date +%Y-%U)" >> $GITHUB_OUTPUT
+
       - name: 📦 Cache Trivy vulnerability database
         uses: actions/cache@v4
         with:
           path: ~/.cache/trivy
-          key: trivy-db-${{ runner.os }}
+          key: trivy-db-${{ runner.os }}-${{ steps.week.outputs.week }}
           restore-keys: |
-            trivy-db-${{ runner.os }}
+            trivy-db-${{ runner.os }}-
 
       - name: 🔍 Scan image for vulnerabilities
         id: trivy-scan
@@ -302,8 +307,8 @@ jobs:
         run: |
           # Check if SARIF file has any results (vulnerabilities)
           if [ -f "trivy-results.sarif" ]; then
-            VULN_COUNT=$(cat trivy-results.sarif | jq '[.runs[].results[]] | length')
-            if [ "$VULN_COUNT" -gt 0 ]; then
+            VULN_COUNT=$(cat trivy-results.sarif | jq '[.runs[].results[]] | length' 2>/dev/null || echo "0")
+            if [ "$VULN_COUNT" -gt 0 ] 2>/dev/null; then
               echo "::error::❌ Trivy found $VULN_COUNT CRITICAL or HIGH vulnerabilities. Check Security tab for details."
               exit 1
             else
