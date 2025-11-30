@@ -40,6 +40,7 @@ env:
   AZURE_CONTAINER_APP: mitra-ai
   AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
   AZURE_LOCATION: eastus
+  HEALTH_ENDPOINT: /health
 
 # ============================================================================
 # JOB 1: Validate (5 min timeout)
@@ -49,6 +50,7 @@ jobs:
     name: 🔍 Validate
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions: {}
     outputs:
       environment: ${{ steps.setup.outputs.environment }}
       image_tag: ${{ steps.setup.outputs.image_tag }}
@@ -68,7 +70,8 @@ jobs:
           
           # Validate required secrets
           ERRORS=0
-          [ -z '${{ secrets.AZURE_CREDENTIALS }}' ] && { echo "::error::AZURE_CREDENTIALS missing"; ERRORS=$((ERRORS+1)); }
+          CREDS="${{ secrets.AZURE_CREDENTIALS }}"
+          [ -z "$CREDS" ] && { echo "::error::AZURE_CREDENTIALS missing"; ERRORS=$((ERRORS+1)); }
           [ -z "${{ secrets.AZURE_RESOURCE_GROUP }}" ] && { echo "::error::AZURE_RESOURCE_GROUP missing"; ERRORS=$((ERRORS+1)); }
           [ -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && { echo "::error::TELEGRAM_BOT_TOKEN missing"; ERRORS=$((ERRORS+1)); }
           [ $ERRORS -gt 0 ] && exit 1
@@ -83,6 +86,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event.inputs.skip_tests != 'true'
+    permissions:
+      contents: read
     outputs:
       tests_passed: ${{ steps.test.outputs.passed }}
     steps:
@@ -154,6 +159,7 @@ jobs:
     needs: [validate, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions: {}
     environment:
       name: ${{ needs.validate.outputs.environment }}
       url: ${{ steps.url.outputs.app_url }}
@@ -222,6 +228,7 @@ jobs:
     needs: [validate, deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions: {}
     outputs:
       healthy: ${{ steps.check.outputs.healthy }}
     steps:
@@ -253,7 +260,7 @@ jobs:
         if: needs.deploy.outputs.app_url != ''
         run: |
           HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 --retry 3 \
-            "${{ needs.deploy.outputs.app_url }}/health" 2>/dev/null || echo "000")
+            "${{ needs.deploy.outputs.app_url }}${{ env.HEALTH_ENDPOINT }}" 2>/dev/null || echo "000")
           [ "$HTTP" == "200" ] && echo "✅ HTTP 200 OK" || echo "::warning::HTTP $HTTP"
       - name: 🔄 Rollback on failure
         if: failure() && needs.deploy.outputs.previous_revision != 'none'
@@ -271,6 +278,7 @@ jobs:
     needs: [validate, build, deploy, health-check]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions: {}
     if: always()
     steps:
       - name: 📊 Generate summary
