@@ -61,18 +61,34 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
+    # Cache Trivy DB to speed up scans - refreshes weekly
+    - name: Get week number for cache key
+      id: week
+      run: echo "week=$(date +%Y-%U)" >> $GITHUB_OUTPUT
+
+    - name: Cache Trivy vulnerability database
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/trivy
+        key: trivy-db-${{ runner.os }}-${{ steps.week.outputs.week }}
+        restore-keys: |
+          trivy-db-${{ runner.os }}-
+    
     - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
+      id: trivy-scan
+      uses: aquasecurity/trivy-action@0.28.0
       with:
         scan-type: 'fs'
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
       continue-on-error: true
     
+    # Only upload SARIF if the file exists
     - name: Upload Trivy results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v2
-      if: always()
+      uses: github/codeql-action/upload-sarif@v4
+      if: always() && hashFiles('trivy-results.sarif') != ''
       with:
         sarif_file: 'trivy-results.sarif'
       continue-on-error: true

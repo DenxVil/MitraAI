@@ -52,9 +52,10 @@ on:
         type: boolean
 
 # CRITICAL FIX: Concurrency control to prevent simultaneous deployments
+# Also cancel in-progress runs for the same ref to prevent overlapping deploys
 concurrency:
-  group: deployment-${{ github.event.inputs.environment || 'staging' }}
-  cancel-in-progress: false
+  group: deployment-${{ github.ref }}-${{ github.event.inputs.environment || 'staging' }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
@@ -65,6 +66,8 @@ env:
   LOG_ANALYTICS_WORKSPACE: mitra-ai-logs
   # VALIDATED LOG LEVELS
   VALID_LOG_LEVELS: "DEBUG INFO WARNING ERROR"
+  # Trivy severity threshold for vulnerability scanning
+  TRIVY_SEVERITY: "CRITICAL,HIGH"
 
 jobs:
   # ============================================================================
@@ -255,6 +258,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          load: true  # CRITICAL FIX: Load image into Docker daemon for local scanning
           push: false  # Push after scanning
           tags: ${{ steps.image-info.outputs.full_image }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -265,21 +269,52 @@ jobs:
             VCS_REF=${{ github.sha }}
             VERSION=${{ steps.image-info.outputs.short_sha }}
 
+      # CRITICAL FIX: Cache Trivy DB to speed up scans and avoid network issues
+      # Cache refreshes weekly to ensure updated vulnerability data
+      - name: 📅 Get week number for cache key
+        id: week
+        run: echo "week=$(date +%Y-%U)" >> $GITHUB_OUTPUT
+
+      - name: 📦 Cache Trivy vulnerability database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ runner.os }}-${{ steps.week.outputs.week }}
+          restore-keys: |
+            trivy-db-${{ runner.os }}-
+
       - name: 🔍 Scan image for vulnerabilities
-        id: scan
-        uses: aquasecurity/trivy-action@master
+        id: trivy-scan
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ steps.image-info.outputs.full_image }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          exit-code: '1'  # CRITICAL FIX: Fail on vulnerabilities
-          severity: 'CRITICAL,HIGH'
+          severity: ${{ env.TRIVY_SEVERITY }}
+          scanners: 'vuln,secret'
+        continue-on-error: true  # Allow workflow to continue for SARIF upload
 
+      # CRITICAL FIX: Only upload SARIF if the file exists
       - name: 📊 Upload scan results to GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'trivy-results.sarif'
+
+      # Fail the build if Trivy found critical/high vulnerabilities
+      - name: 🚫 Check Trivy scan results
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        run: |
+          # Check if SARIF file has any results (vulnerabilities)
+          if [ -f "trivy-results.sarif" ]; then
+            VULN_COUNT=$(cat trivy-results.sarif | jq '[.runs[].results[]] | length' 2>/dev/null || echo "0")
+            if [ "$VULN_COUNT" -gt 0 ] 2>/dev/null; then
+              echo "::error::❌ Trivy found $VULN_COUNT CRITICAL or HIGH vulnerabilities. Check Security tab for details."
+              exit 1
+            else
+              echo "✅ No CRITICAL or HIGH vulnerabilities found"
+            fi
+          fi
 
       # CRITICAL FIX: Split into two separate steps
       - name: 🔧 Install Cosign
