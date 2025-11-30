@@ -66,9 +66,9 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/trivy
-        key: trivy-db-${{ runner.os }}-${{ github.run_id }}
+        key: trivy-db-${{ runner.os }}
         restore-keys: |
-          trivy-db-${{ runner.os }}-
+          trivy-db-${{ runner.os }}
     
     - name: Run Trivy vulnerability scanner
       id: trivy-scan

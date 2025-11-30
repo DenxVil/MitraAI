@@ -274,9 +274,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/trivy
-          key: trivy-db-${{ runner.os }}-${{ github.run_id }}
+          key: trivy-db-${{ runner.os }}
           restore-keys: |
-            trivy-db-${{ runner.os }}-
+            trivy-db-${{ runner.os }}
 
       - name: 🔍 Scan image for vulnerabilities
         id: trivy-scan
@@ -285,7 +285,6 @@ jobs:
           image-ref: ${{ steps.image-info.outputs.full_image }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          exit-code: '1'  # CRITICAL FIX: Fail on vulnerabilities
           severity: ${{ env.TRIVY_SEVERITY }}
           scanners: 'vuln,secret'
         continue-on-error: true  # Allow workflow to continue for SARIF upload
@@ -299,10 +298,18 @@ jobs:
 
       # Fail the build if Trivy found critical/high vulnerabilities
       - name: 🚫 Check Trivy scan results
-        if: steps.trivy-scan.outcome == 'failure'
+        if: always() && hashFiles('trivy-results.sarif') != ''
         run: |
-          echo "::error::❌ Trivy found CRITICAL or HIGH vulnerabilities. Check Security tab for details."
-          exit 1
+          # Check if SARIF file has any results (vulnerabilities)
+          if [ -f "trivy-results.sarif" ]; then
+            VULN_COUNT=$(cat trivy-results.sarif | jq '[.runs[].results[]] | length')
+            if [ "$VULN_COUNT" -gt 0 ]; then
+              echo "::error::❌ Trivy found $VULN_COUNT CRITICAL or HIGH vulnerabilities. Check Security tab for details."
+              exit 1
+            else
+              echo "✅ No CRITICAL or HIGH vulnerabilities found"
+            fi
+          fi
 
       # CRITICAL FIX: Split into two separate steps
       - name: 🔧 Install Cosign
