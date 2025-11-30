@@ -548,7 +548,7 @@ jobs:
               --secrets \
                 "telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
               --cpu 0.5 \
-              --memory 1. 0Gi \
+              --memory 1.0Gi \
               --min-replicas 0 \
               --max-replicas 3 \
               --query "{Name:name, Image:properties.template.containers[0].image, ProvisioningState:properties.provisioningState, LatestRevision:properties.latestRevisionName}" \
